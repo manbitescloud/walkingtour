@@ -3,6 +3,7 @@ import Foundation
 
 struct TourPlanner {
     private let wikipediaService = WikipediaService()
+    private let wikivoyageService = WikivoyageService()
     private let placesService = PlacesService()
     private let attractionService = TouristAttractionService()
     private let directionsService = DirectionsService()
@@ -32,11 +33,21 @@ struct TourPlanner {
             radiusMeters: radius,
             limit: 10
         )
+        async let wikivoyageStopsTask = wikivoyageService.recommendedStops(
+            near: start,
+            radiusMeters: radius,
+            includeSightseeing: true,
+            includeFood: preferences.includeFoodStops || themes.contains(.foodie),
+            includeCoffee: preferences.includeCoffeeStops || themes.contains(.foodie),
+            limit: 24
+        )
 
         let wiki = (try? await wikiStopsTask) ?? []
         let places = await placeStopsTask
         let attractions = await attractionStopsTask
+        let wikivoyage = await wikivoyageStopsTask
         let candidates = mergeCandidates(
+            wikivoyage: wikivoyage,
             attractions: attractions,
             wiki: wiki,
             places: places,
@@ -54,11 +65,22 @@ struct TourPlanner {
         let wantsRefreshments = preferences.includeFoodStops || preferences.includeCoffeeStops
         if wantsRefreshments, !selected.isEmpty {
             let midpoint = selected[selected.count / 2].coordinate
-            let refreshmentStops = await placesService.foodAndCoffeeStops(
+            async let mapRefreshmentsTask = placesService.foodAndCoffeeStops(
                 near: midpoint,
                 includeFood: preferences.includeFoodStops,
                 includeCoffee: preferences.includeCoffeeStops
             )
+            async let guideRefreshmentsTask = wikivoyageService.recommendedStops(
+                near: midpoint,
+                radiusMeters: 1_500,
+                includeSightseeing: false,
+                includeFood: preferences.includeFoodStops,
+                includeCoffee: preferences.includeCoffeeStops,
+                limit: 12
+            )
+            let mapRefreshments = await mapRefreshmentsTask
+            let guideRefreshments = await guideRefreshmentsTask
+            let refreshmentStops = mapRefreshments + guideRefreshments
             if let bestRefreshment = pickBestRefreshment(from: refreshmentStops, near: midpoint) {
                 let insertIndex = min(selected.count / 2 + 1, selected.count)
                 selected.insert(bestRefreshment, at: insertIndex)
@@ -118,10 +140,25 @@ struct TourPlanner {
             radiusMeters: 1_200,
             categories: themes.combinedPreferredCategories
         )
+        async let wikivoyageTask = wikivoyageService.recommendedStops(
+            near: coordinate,
+            radiusMeters: 1_200,
+            includeSightseeing: true,
+            includeFood: themes.contains(.foodie),
+            includeCoffee: themes.contains(.foodie),
+            limit: 12
+        )
 
         let attractions = await attractionsTask
         let places = await placesTask
-        let merged = mergeCandidates(attractions: attractions, wiki: [], places: places, themes: themes)
+        let wikivoyage = await wikivoyageTask
+        let merged = mergeCandidates(
+            wikivoyage: wikivoyage,
+            attractions: attractions,
+            wiki: [],
+            places: places,
+            themes: themes
+        )
 
         let filtered = merged
             .filter { !existingNames.contains($0.name.lowercased()) }
@@ -138,6 +175,7 @@ struct TourPlanner {
     }
 
     private func mergeCandidates(
+        wikivoyage: [TourStop],
         attractions: [TourStop],
         wiki: [TourStop],
         places: [TourStop],
@@ -145,8 +183,8 @@ struct TourPlanner {
     ) -> [TourStop] {
         var mergedByName: [String: TourStop] = [:]
 
-        // Attractions first so they win dedupe ties and keep rank metadata.
-        for stop in attractions + wiki + places {
+        // Wikivoyage and ranked attractions win dedupe ties and keep curation metadata.
+        for stop in wikivoyage + attractions + wiki + places {
             let key = stop.name.lowercased()
             if let existing = mergedByName[key] {
                 mergedByName[key] = mergeStop(existing, with: stop)
@@ -272,7 +310,7 @@ struct TourPlanner {
 
         var score = themes.score(for: stop)
         if let rank = stop.touristAttractionRank {
-            score += Double(11 - min(rank, 10)) * 2
+            score += Double(11 - min(rank, 10)) * 2.5
         }
         score -= distance / 600
         return score
@@ -287,8 +325,9 @@ struct TourPlanner {
     private func refreshmentScore(_ stop: TourStop, near coordinate: CLLocationCoordinate2D) -> Double {
         let distance = directionsService.straightLineDistance(from: coordinate, to: stop.coordinate)
         let relevanceBonus = Double(12 - min(stop.appleMapsRelevanceRank ?? 11, 11)) * 0.4
+        let guideBonus = stop.touristAttractionRank.map { Double(11 - min($0, 10)) * 1.5 } ?? 0
         let ratingBonus = (stop.rating ?? 0) * 2
-        return relevanceBonus + ratingBonus - distance / 900
+        return relevanceBonus + guideBonus + ratingBonus - distance / 900
     }
 
     private func reorderNearestNeighbor(
