@@ -1,0 +1,35 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Global Coverage",
+        "description": "Walking Tour walking directions via Apple MapKit worldwide"
+      },
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [
+            [
+              [-180.0, -90.0],
+              [0.0, -90.0],
+              [0.0, 90.0],
+              [-180.0, 90.0],
+              [-180.0, -90.0]
+            ]
+          ],
+          [
+            [
+              [0.0, -90.0],
+              [180.0, -90.0],
+              [180.0, 90.0],
+              [0.0, 90.0],
+              [0.0, -90.0]
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}
